@@ -1,642 +1,650 @@
+/* Copyright 2016-2017 Jack Humbert
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "quantum.h"
-#include "timer.h"
 
-__attribute__ ((weak))
-void matrix_init_kb(void) {}
+#ifdef BACKLIGHT_ENABLE
+#    include "process_backlight.h"
+#endif
 
-__attribute__ ((weak))
-void matrix_scan_kb(void) {}
+#ifdef BLUETOOTH_ENABLE
+#    include "outputselect.h"
+#endif
 
-__attribute__ ((weak))
-bool process_action_kb(keyrecord_t *record) {
-  return true;
-}
+#ifdef GRAVE_ESC_ENABLE
+#    include "process_grave_esc.h"
+#endif
 
-__attribute__ ((weak))
-bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
-  return process_record_user(keycode, record);
-}
+#ifdef HAPTIC_ENABLE
+#    include "process_haptic.h"
+#endif
 
-__attribute__ ((weak))
-bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-  return true;
-}
+#ifdef JOYSTICK_ENABLE
+#    include "process_joystick.h"
+#endif
 
-__attribute__ ((weak))
-void leader_start(void) {}
+#ifdef LEADER_ENABLE
+#    include "process_leader.h"
+#endif
 
-__attribute__ ((weak))
-void leader_end(void) {}
+#ifdef LED_MATRIX_ENABLE
+#    include "process_led_matrix.h"
+#endif
 
-uint8_t starting_note = 0x0C;
-int offset = 7;
-
-
-#ifdef AUDIO_ENABLE
-  bool music_activated = false;
-
-// music sequencer
-static bool music_sequence_recording = false;
-static bool music_sequence_playing = false;
-static float music_sequence[16] = {0};
-static uint8_t music_sequence_count = 0;
-static uint8_t music_sequence_position = 0;
-
-static uint16_t music_sequence_timer = 0;
-static uint16_t music_sequence_interval = 100;
-
+#ifdef MAGIC_ENABLE
+#    include "process_magic.h"
 #endif
 
 #ifdef MIDI_ENABLE
-  bool midi_activated = false;
+#    include "process_midi.h"
 #endif
 
-// Leader key stuff
-bool leading = false;
-uint16_t leader_time = 0;
-
-uint16_t leader_sequence[3] = {0, 0, 0};
-uint8_t leader_sequence_size = 0;
-
-// Chording stuff
-#define CHORDING_MAX 4
-bool chording = false;
-
-uint8_t chord_keys[CHORDING_MAX] = {0};
-uint8_t chord_key_count = 0;
-uint8_t chord_key_down = 0;
-
-#ifdef UNICODE_ENABLE
-  static uint8_t input_mode;
+#ifdef PROGRAMMABLE_BUTTON_ENABLE
+#    include "process_programmable_button.h"
 #endif
 
-static bool shift_interrupted[2] = {0, 0};
+#if defined(RGBLIGHT_ENABLE) || defined(RGB_MATRIX_ENABLE)
+#    include "process_rgb.h"
+#endif
 
-bool keys_chord(uint8_t keys[]) {
-  uint8_t keys_size = sizeof(keys)/sizeof(keys[0]);
-  bool pass = true;
-  uint8_t in = 0;
-  for (uint8_t i = 0; i < chord_key_count; i++) {
-    bool found = false;
-    for (uint8_t j = 0; j < keys_size; j++) {
-      if (chord_keys[i] == (keys[j] & 0xFF)) {
-        in++; // detects key in chord
-        found = true;
-        break;
-      }
+#ifdef SECURE_ENABLE
+#    include "process_secure.h"
+#endif
+
+#ifdef TRI_LAYER_ENABLE
+#    include "process_tri_layer.h"
+#endif
+
+#ifdef UNICODE_COMMON_ENABLE
+#    include "process_unicode_common.h"
+#endif
+
+#ifdef AUDIO_ENABLE
+#    ifndef GOODBYE_SONG
+#        define GOODBYE_SONG SONG(GOODBYE_SOUND)
+#    endif
+float goodbye_song[][2] = GOODBYE_SONG;
+#    ifdef DEFAULT_LAYER_SONGS
+float default_layer_songs[][16][2] = DEFAULT_LAYER_SONGS;
+#    endif
+#endif
+
+uint8_t extract_mod_bits(uint16_t code) {
+    switch (code) {
+        case QK_MODS ... QK_MODS_MAX:
+            break;
+        default:
+            return 0;
     }
-    if (found)
-      continue;
-    if (chord_keys[i] != 0)  {
-      pass = false; // makes sure rest are blank
-    }
-  }
-  return (pass && (in == keys_size));
-}
 
-#ifdef UNICODE_ENABLE
+    uint8_t mods_to_send = 0;
 
-uint16_t hex_to_keycode(uint8_t hex)
-{
-  if (hex == 0x0) {
-    return KC_0;
-  } else if (hex < 0xA) {
-    return KC_1 + (hex - 0x1);
-  } else {
-    return KC_A + (hex - 0xA);
-  }
-}
-
-void set_unicode_mode(uint8_t os_target)
-{
-  input_mode = os_target;
-}
-
-#endif
-
-bool process_record_quantum(keyrecord_t *record) {
-
-  /* This gets the keycode from the key pressed */
-  keypos_t key = record->event.key;
-  uint16_t keycode;
-
-  #if !defined(NO_ACTION_LAYER) && defined(PREVENT_STUCK_MODIFIERS)
-    uint8_t layer;
-
-    if (record->event.pressed) {
-      layer = layer_switch_get_layer(key);
-      update_source_layers_cache(key, layer);
+    if (code & QK_RMODS_MIN) { // Right mod flag is set
+        if (code & QK_LCTL) mods_to_send |= MOD_BIT(KC_RIGHT_CTRL);
+        if (code & QK_LSFT) mods_to_send |= MOD_BIT(KC_RIGHT_SHIFT);
+        if (code & QK_LALT) mods_to_send |= MOD_BIT(KC_RIGHT_ALT);
+        if (code & QK_LGUI) mods_to_send |= MOD_BIT(KC_RIGHT_GUI);
     } else {
-      layer = read_source_layers_cache(key);
+        if (code & QK_LCTL) mods_to_send |= MOD_BIT(KC_LEFT_CTRL);
+        if (code & QK_LSFT) mods_to_send |= MOD_BIT(KC_LEFT_SHIFT);
+        if (code & QK_LALT) mods_to_send |= MOD_BIT(KC_LEFT_ALT);
+        if (code & QK_LGUI) mods_to_send |= MOD_BIT(KC_LEFT_GUI);
     }
-    keycode = keymap_key_to_keycode(layer, key);
-  #else
-    keycode = keymap_key_to_keycode(layer_switch_get_layer(key), key);
-  #endif
 
-  if (!process_record_kb(keycode, record))
-    return false;
+    return mods_to_send;
+}
+
+void do_code16(uint16_t code, void (*f)(uint8_t)) {
+    f(extract_mod_bits(code));
+}
+
+__attribute__((weak)) void register_code16(uint16_t code) {
+    if (IS_MODIFIER_KEYCODE(code) || code == KC_NO) {
+        do_code16(code, register_mods);
+    } else {
+        do_code16(code, register_weak_mods);
+    }
+    register_code(code);
+}
+
+__attribute__((weak)) void unregister_code16(uint16_t code) {
+    unregister_code(code);
+    if (IS_MODIFIER_KEYCODE(code) || code == KC_NO) {
+        do_code16(code, unregister_mods);
+    } else {
+        do_code16(code, unregister_weak_mods);
+    }
+}
+
+/** \brief Tap a keycode with a delay.
+ *
+ * \param code The modded keycode to tap.
+ * \param delay The amount of time in milliseconds to leave the keycode registered, before unregistering it.
+ */
+__attribute__((weak)) void tap_code16_delay(uint16_t code, uint16_t delay) {
+    register_code16(code);
+    for (uint16_t i = delay; i > 0; i--) {
+        wait_ms(1);
+    }
+    unregister_code16(code);
+}
+
+/** \brief Tap a keycode with the default delay.
+ *
+ * \param code The modded keycode to tap. If `code` is `KC_CAPS_LOCK`, the delay will be `TAP_HOLD_CAPS_DELAY`, otherwise `TAP_CODE_DELAY`, if defined.
+ */
+__attribute__((weak)) void tap_code16(uint16_t code) {
+    tap_code16_delay(code, code == KC_CAPS_LOCK ? TAP_HOLD_CAPS_DELAY : TAP_CODE_DELAY);
+}
+
+__attribute__((weak)) bool pre_process_record_kb(uint16_t keycode, keyrecord_t *record) {
+    return pre_process_record_user(keycode, record);
+}
+
+__attribute__((weak)) bool pre_process_record_user(uint16_t keycode, keyrecord_t *record) {
+    return true;
+}
+
+__attribute__((weak)) bool process_action_kb(keyrecord_t *record) {
+    return true;
+}
+
+__attribute__((weak)) bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
+    return process_record_user(keycode, record);
+}
+
+__attribute__((weak)) bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    return true;
+}
+
+__attribute__((weak)) void post_process_record_kb(uint16_t keycode, keyrecord_t *record) {
+    post_process_record_user(keycode, record);
+}
+
+__attribute__((weak)) void post_process_record_user(uint16_t keycode, keyrecord_t *record) {}
+
+void shutdown_quantum(bool jump_to_bootloader) {
+    clear_keyboard();
+#if defined(MIDI_ENABLE) && defined(MIDI_BASIC)
+    process_midi_all_notes_off();
+#endif
+#ifdef AUDIO_ENABLE
+#    ifndef NO_MUSIC_MODE
+    music_all_notes_off();
+#    endif
+    uint16_t timer_start = timer_read();
+    PLAY_SONG(goodbye_song);
+    shutdown_kb(jump_to_bootloader);
+    while (timer_elapsed(timer_start) < 250)
+        wait_ms(1);
+    stop_all_notes();
+#else
+    shutdown_kb(jump_to_bootloader);
+    wait_ms(250);
+#endif
+#ifdef HAPTIC_ENABLE
+    haptic_shutdown();
+#endif
+}
+
+void reset_keyboard(void) {
+    shutdown_quantum(true);
+    bootloader_jump();
+}
+
+void soft_reset_keyboard(void) {
+    shutdown_quantum(false);
+    mcu_reset();
+}
+
+/* Convert record into usable keycode via the contained event. */
+uint16_t get_record_keycode(keyrecord_t *record, bool update_layer_cache) {
+#if defined(COMBO_ENABLE) || defined(REPEAT_KEY_ENABLE)
+    if (record->keycode) {
+        return record->keycode;
+    }
+#endif
+    return get_event_keycode(record->event, update_layer_cache);
+}
+
+/* Convert event into usable keycode. Checks the layer cache to ensure that it
+ * retains the correct keycode after a layer change, if the key is still pressed.
+ * "update_layer_cache" is to ensure that it only updates the layer cache when
+ * appropriate, otherwise, it will update it and cause layer tap (and other keys)
+ * from triggering properly.
+ */
+uint16_t get_event_keycode(keyevent_t event, bool update_layer_cache) {
+#if !defined(NO_ACTION_LAYER) && !defined(STRICT_LAYER_RELEASE)
+    /* TODO: Use store_or_get_action() or a similar function. */
+    if (!disable_action_cache) {
+        uint8_t layer;
+
+        if (event.pressed && update_layer_cache) {
+            layer = layer_switch_get_layer(event.key);
+            update_source_layers_cache(event.key, layer);
+        } else {
+            layer = read_source_layers_cache(event.key);
+        }
+        return keymap_key_to_keycode(layer, event.key);
+    } else
+#endif
+        return keymap_key_to_keycode(layer_switch_get_layer(event.key), event.key);
+}
+
+/* Get keycode, and then process pre tapping functionality */
+bool pre_process_record_quantum(keyrecord_t *record) {
+    uint16_t keycode = get_record_keycode(record, true);
+    return pre_process_record_kb(keycode, record) &&
+#ifdef COMBO_ENABLE
+           process_combo(keycode, record) &&
+#endif
+           true;
+}
+
+/* Get keycode, and then call keyboard function */
+void post_process_record_quantum(keyrecord_t *record) {
+    uint16_t keycode = get_record_keycode(record, false);
+    post_process_record_kb(keycode, record);
+}
+
+/* Core keycode function, hands off handling to other functions,
+    then processes internal quantum keycodes, and then processes
+    ACTIONs.                                                      */
+bool process_record_quantum(keyrecord_t *record) {
+    uint16_t keycode = get_record_keycode(record, true);
 
     // This is how you use actions here
-    // if (keycode == KC_LEAD) {
+    // if (keycode == QK_LEADER) {
     //   action_t action;
     //   action.code = ACTION_DEFAULT_LAYER_SET(0);
     //   process_action(record, action);
     //   return false;
     // }
 
-  #ifdef MIDI_ENABLE
-    if (keycode == MI_ON && record->event.pressed) {
-      midi_activated = true;
-      music_scale_user();
-      return false;
-    }
-
-    if (keycode == MI_OFF && record->event.pressed) {
-      midi_activated = false;
-      midi_send_cc(&midi_device, 0, 0x7B, 0);
-      return false;
-    }
-
-    if (midi_activated) {
-      if (record->event.key.col == (MATRIX_COLS - 1) && record->event.key.row == (MATRIX_ROWS - 1)) {
-          if (record->event.pressed) {
-              starting_note++; // Change key
-              midi_send_cc(&midi_device, 0, 0x7B, 0);
-              // midi_send_cc(&midi_device, 1, 0x7B, 0);
-              // midi_send_cc(&midi_device, 2, 0x7B, 0);
-              // midi_send_cc(&midi_device, 3, 0x7B, 0);
-              // midi_send_cc(&midi_device, 4, 0x7B, 0);
-          }
-          return false;
-      }
-      if (record->event.key.col == (MATRIX_COLS - 2) && record->event.key.row == (MATRIX_ROWS - 1)) {
-          if (record->event.pressed) {
-              starting_note--; // Change key
-              midi_send_cc(&midi_device, 0, 0x7B, 0);
-              // midi_send_cc(&midi_device, 1, 0x7B, 0);
-              // midi_send_cc(&midi_device, 2, 0x7B, 0);
-              // midi_send_cc(&midi_device, 3, 0x7B, 0);
-              // midi_send_cc(&midi_device, 4, 0x7B, 0);
-          }
-          return false;
-      }
-      if (record->event.key.col == (MATRIX_COLS - 3) && record->event.key.row == (MATRIX_ROWS - 1) && record->event.pressed) {
-          offset++; // Change scale
-          midi_send_cc(&midi_device, 0, 0x7B, 0);
-          // midi_send_cc(&midi_device, 1, 0x7B, 0);
-          // midi_send_cc(&midi_device, 2, 0x7B, 0);
-          // midi_send_cc(&midi_device, 3, 0x7B, 0);
-          // midi_send_cc(&midi_device, 4, 0x7B, 0);
-          return false;
-      }
-      if (record->event.key.col == (MATRIX_COLS - 4) && record->event.key.row == (MATRIX_ROWS - 1) && record->event.pressed) {
-          offset--; // Change scale
-          midi_send_cc(&midi_device, 0, 0x7B, 0);
-          // midi_send_cc(&midi_device, 1, 0x7B, 0);
-          // midi_send_cc(&midi_device, 2, 0x7B, 0);
-          // midi_send_cc(&midi_device, 3, 0x7B, 0);
-          // midi_send_cc(&midi_device, 4, 0x7B, 0);
-          return false;
-      }
-      // basic
-      // uint8_t note = (starting_note + SCALE[record->event.key.col + offset])+12*(MATRIX_ROWS - record->event.key.row);
-      // advanced
-      // uint8_t note = (starting_note + record->event.key.col + offset)+12*(MATRIX_ROWS - record->event.key.row);
-      // guitar
-      uint8_t note = (starting_note + record->event.key.col + offset)+5*(MATRIX_ROWS - record->event.key.row);
-      // violin
-      // uint8_t note = (starting_note + record->event.key.col + offset)+7*(MATRIX_ROWS - record->event.key.row);
-
-      if (record->event.pressed) {
-        // midi_send_noteon(&midi_device, record->event.key.row, starting_note + SCALE[record->event.key.col], 127);
-        midi_send_noteon(&midi_device, 0, note, 127);
-      } else {
-        // midi_send_noteoff(&midi_device, record->event.key.row, starting_note + SCALE[record->event.key.col], 127);
-        midi_send_noteoff(&midi_device, 0, note, 127);
-      }
-
-      if (keycode < 0xFF) // ignores all normal keycodes, but lets RAISE, LOWER, etc through
+#if defined(SECURE_ENABLE)
+    if (!preprocess_secure(keycode, record)) {
         return false;
     }
-  #endif
-
-  #ifdef AUDIO_ENABLE
-    if (keycode == AU_ON && record->event.pressed) {
-      audio_on();
-      return false;
-    }
-
-    if (keycode == AU_OFF && record->event.pressed) {
-      audio_off();
-      return false;
-    }
-
-    if (keycode == AU_TOG && record->event.pressed) {
-        if (is_audio_on())
-        {
-            audio_off();
-        }
-        else
-        {
-            audio_on();
-        }
-      return false;
-    }
-
-    if (keycode == MU_ON && record->event.pressed) {
-        music_on();
-        return false;
-    }
-
-    if (keycode == MU_OFF && record->event.pressed) {
-        music_off();
-        return false;
-    }
-
-    if (keycode == MU_TOG && record->event.pressed) {
-        if (music_activated)
-        {
-            music_off();
-        }
-        else
-        {
-            music_on();
-        }
-        return false;
-    }
-
-    if (keycode == MUV_IN && record->event.pressed) {
-        voice_iterate();
-        music_scale_user();
-        return false;
-    }
-
-    if (keycode == MUV_DE && record->event.pressed) {
-        voice_deiterate();
-        music_scale_user();
-        return false;
-    }
-
-    if (music_activated) {
-
-      if (keycode == KC_LCTL && record->event.pressed) { // Start recording
-        stop_all_notes();
-        music_sequence_recording = true;
-        music_sequence_playing = false;
-        music_sequence_count = 0;
-        return false;
-      }
-
-      if (keycode == KC_LALT && record->event.pressed) { // Stop recording/playing
-        stop_all_notes();
-        music_sequence_recording = false;
-        music_sequence_playing = false;
-        return false;
-      }
-
-      if (keycode == KC_LGUI && record->event.pressed) { // Start playing
-        stop_all_notes();
-        music_sequence_recording = false;
-        music_sequence_playing = true;
-        music_sequence_position = 0;
-        music_sequence_timer = 0;
-        return false;
-      }
-
-      if (keycode == KC_UP) {
-        if (record->event.pressed)
-            music_sequence_interval-=10;
-        return false;
-      }
-
-      if (keycode == KC_DOWN) {
-        if (record->event.pressed)
-            music_sequence_interval+=10;
-        return false;
-      }
-
-      float freq = ((float)220.0)*pow(2.0, -5.0)*pow(2.0,(starting_note + SCALE[record->event.key.col + offset])/12.0+(MATRIX_ROWS - record->event.key.row));
-      if (record->event.pressed) {
-        play_note(freq, 0xF);
-        if (music_sequence_recording) {
-          music_sequence[music_sequence_count] = freq;
-          music_sequence_count++;
-        }
-      } else {
-        stop_note(freq);
-      }
-
-      if (keycode < 0xFF) // ignores all normal keycodes, but lets RAISE, LOWER, etc through
-        return false;
-    }
-  #endif
-
-#ifndef DISABLE_LEADER
-  // Leader key set-up
-  if (record->event.pressed) {
-    if (!leading && keycode == KC_LEAD) {
-      leader_start();
-      leading = true;
-      leader_time = timer_read();
-      leader_sequence_size = 0;
-      leader_sequence[0] = 0;
-      leader_sequence[1] = 0;
-      leader_sequence[2] = 0;
-      return false;
-    }
-    if (leading && timer_elapsed(leader_time) < LEADER_TIMEOUT) {
-      leader_sequence[leader_sequence_size] = keycode;
-      leader_sequence_size++;
-      return false;
-    }
-  }
 #endif
 
-#define DISABLE_CHORDING
-#ifndef DISABLE_CHORDING
+#ifdef TAP_DANCE_ENABLE
+    if (preprocess_tap_dance(keycode, record)) {
+        // The tap dance might have updated the layer state, therefore the
+        // result of the keycode lookup might change.
+        keycode = get_record_keycode(record, true);
+    }
+#endif
 
-  if (keycode >= 0x5700 && keycode <= 0x57FF) {
+#ifdef RGBLIGHT_ENABLE
     if (record->event.pressed) {
-      if (!chording) {
-        chording = true;
-        for (uint8_t i = 0; i < CHORDING_MAX; i++)
-          chord_keys[i] = 0;
-        chord_key_count = 0;
-        chord_key_down = 0;
-      }
-      chord_keys[chord_key_count] = (keycode & 0xFF);
-      chord_key_count++;
-      chord_key_down++;
-      return false;
-    } else {
-      if (chording) {
-        chord_key_down--;
-        if (chord_key_down == 0) {
-          chording = false;
-          // Chord Dictionary
-          if (keys_chord((uint8_t[]){KC_ENTER, KC_SPACE})) {
-            register_code(KC_A);
-            unregister_code(KC_A);
-            return false;
-          }
-          for (uint8_t i = 0; i < chord_key_count; i++) {
-            register_code(chord_keys[i]);
-            unregister_code(chord_keys[i]);
-            return false;
-          }
-        }
-      }
+        preprocess_rgblight();
     }
-  }
-
 #endif
 
-#ifdef UNICODE_ENABLE
-
-  if (keycode > UNICODE(0) && record->event.pressed) {
-    uint16_t unicode = keycode & 0x7FFF;
-    switch(input_mode) {
-      case UC_OSX:
-        register_code(KC_LALT);
-        break;
-      case UC_LNX:
-        register_code(KC_LCTL);
-        register_code(KC_LSFT);
-        register_code(KC_U);
-        unregister_code(KC_U);
-        break;
-      case UC_WIN:
-        register_code(KC_LALT);
-        register_code(KC_PPLS);
-        unregister_code(KC_PPLS);
-        break;
+#ifdef WPM_ENABLE
+    if (record->event.pressed) {
+        update_wpm(keycode);
     }
-    for(int i = 3; i >= 0; i--) {
-        uint8_t digit = ((unicode >> (i*4)) & 0xF);
-        register_code(hex_to_keycode(digit));
-        unregister_code(hex_to_keycode(digit));
-    }
-    switch(input_mode) {
-      case UC_OSX:
-      case UC_WIN:
-        unregister_code(KC_LALT);
-        break;
-      case UC_LNX:
-        unregister_code(KC_LCTL);
-        unregister_code(KC_LSFT);
-        break;
-    }
-  }
-
 #endif
 
-  switch(keycode) {
-    case KC_LSPO: {
-                    if (record->event.pressed) {
-                      shift_interrupted[0] = false;
-                      register_mods(MOD_BIT(KC_LSFT));
-                    }
-                    else {
-                      if (!shift_interrupted[0]) {
-                        register_code(KC_9);
-                        unregister_code(KC_9);
-                      }
-                      unregister_mods(MOD_BIT(KC_LSFT));
-                    }
-                    return false;
-                    break;
-                  }
-
-    case KC_RSPC: {
-                    if (record->event.pressed) {
-                      shift_interrupted[1] = false;
-                      register_mods(MOD_BIT(KC_RSFT));
-                    }
-                    else {
-                      if (!shift_interrupted[1]) {
-                        register_code(KC_0);
-                        unregister_code(KC_0);
-                      }
-                      unregister_mods(MOD_BIT(KC_RSFT));
-                    }
-                    return false;
-                    break;
-                  }
-    default: {
-               shift_interrupted[0] = true;
-               shift_interrupted[1] = true;
-               break;
-             }
-  }
-
-  return process_action_kb(record);
-}
-
-const bool ascii_to_qwerty_shift_lut[0x80] PROGMEM = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 1, 1, 1, 1, 1, 0,
-    1, 1, 1, 1, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 1, 0, 1, 0, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 0, 0, 0, 1, 1,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 1, 1, 1, 1, 0
-};
-
-const uint8_t ascii_to_qwerty_keycode_lut[0x80] PROGMEM = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    KC_BSPC, KC_TAB, KC_ENT, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, KC_ESC, 0, 0, 0, 0,
-    KC_SPC, KC_1, KC_QUOT, KC_3, KC_4, KC_5, KC_7, KC_QUOT,
-    KC_9, KC_0, KC_8, KC_EQL, KC_COMM, KC_MINS, KC_DOT, KC_SLSH,
-    KC_0, KC_1, KC_2, KC_3, KC_4, KC_5, KC_6, KC_7,
-    KC_8, KC_9, KC_SCLN, KC_SCLN, KC_COMM, KC_EQL, KC_DOT, KC_SLSH,
-    KC_2, KC_A, KC_B, KC_C, KC_D, KC_E, KC_F, KC_G,
-    KC_H, KC_I, KC_J, KC_K, KC_L, KC_M, KC_N, KC_O,
-    KC_P, KC_Q, KC_R, KC_S, KC_T, KC_U, KC_V, KC_W,
-    KC_X, KC_Y, KC_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_6, KC_MINS,
-    KC_GRV, KC_A, KC_B, KC_C, KC_D, KC_E, KC_F, KC_G,
-    KC_H, KC_I, KC_J, KC_K, KC_L, KC_M, KC_N, KC_O,
-    KC_P, KC_Q, KC_R, KC_S, KC_T, KC_U, KC_V, KC_W,
-    KC_X, KC_Y, KC_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_GRV, KC_DEL
-};
-
-/* for users whose OSes are set to Colemak */
-#if 0
-#include "keymap_colemak.h"
-
-const bool ascii_to_colemak_shift_lut[0x80] PROGMEM = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 1, 1, 1, 1, 1, 0,
-    1, 1, 1, 1, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 1, 0, 1, 0, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 0, 0, 0, 1, 1,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 1, 1, 1, 1, 0
-};
-
-const uint8_t ascii_to_colemak_keycode_lut[0x80] PROGMEM = {
-    0, 0, 0, 0, 0, 0, 0, 0,
-    KC_BSPC, KC_TAB, KC_ENT, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, KC_ESC, 0, 0, 0, 0,
-    KC_SPC, KC_1, KC_QUOT, KC_3, KC_4, KC_5, KC_7, KC_QUOT,
-    KC_9, KC_0, KC_8, KC_EQL, KC_COMM, KC_MINS, KC_DOT, KC_SLSH,
-    KC_0, KC_1, KC_2, KC_3, KC_4, KC_5, KC_6, KC_7,
-    KC_8, KC_9, CM_SCLN, CM_SCLN, KC_COMM, KC_EQL, KC_DOT, KC_SLSH,
-    KC_2, CM_A, CM_B, CM_C, CM_D, CM_E, CM_F, CM_G,
-    CM_H, CM_I, CM_J, CM_K, CM_L, CM_M, CM_N, CM_O,
-    CM_P, CM_Q, CM_R, CM_S, CM_T, CM_U, CM_V, CM_W,
-    CM_X, CM_Y, CM_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_6, KC_MINS,
-    KC_GRV, CM_A, CM_B, CM_C, CM_D, CM_E, CM_F, CM_G,
-    CM_H, CM_I, CM_J, CM_K, CM_L, CM_M, CM_N, CM_O,
-    CM_P, CM_Q, CM_R, CM_S, CM_T, CM_U, CM_V, CM_W,
-    CM_X, CM_Y, CM_Z, KC_LBRC, KC_BSLS, KC_RBRC, KC_GRV, KC_DEL
-};
-
+    if (!(
+#if defined(KEY_LOCK_ENABLE)
+            // Must run first to be able to mask key_up events.
+            process_key_lock(&keycode, record) &&
 #endif
-
-void send_string(const char *str) {
-    while (1) {
-        uint8_t keycode;
-        uint8_t ascii_code = pgm_read_byte(str);
-        if (!ascii_code) break;
-        keycode = pgm_read_byte(&ascii_to_qwerty_keycode_lut[ascii_code]);
-        if (pgm_read_byte(&ascii_to_qwerty_shift_lut[ascii_code])) {
-            register_code(KC_LSFT);
-            register_code(keycode);
-            unregister_code(keycode);
-            unregister_code(KC_LSFT);
-        }
-        else {
-            register_code(keycode);
-            unregister_code(keycode);
-        }
-        ++str;
-    }
-}
-
-
-void matrix_init_quantum() {
-  matrix_init_kb();
-}
-
-void matrix_scan_quantum() {
-  #ifdef AUDIO_ENABLE
-  if (music_sequence_playing) {
-    if ((music_sequence_timer == 0) || (timer_elapsed(music_sequence_timer) > music_sequence_interval)) {
-      music_sequence_timer = timer_read();
-      stop_note(music_sequence[(music_sequence_position - 1 < 0)?(music_sequence_position - 1 + music_sequence_count):(music_sequence_position - 1)]);
-      play_note(music_sequence[music_sequence_position], 0xF);
-      music_sequence_position = (music_sequence_position + 1) % music_sequence_count;
-    }
-  }
-
-  #endif
-
-  matrix_scan_kb();
-}
+#if defined(DYNAMIC_MACRO_ENABLE) && !defined(DYNAMIC_MACRO_USER_CALL)
+            // Must run asap to ensure all keypresses are recorded.
+            process_dynamic_macro(keycode, record) &&
+#endif
+#ifdef REPEAT_KEY_ENABLE
+            process_last_key(keycode, record) && process_repeat_key(keycode, record) &&
+#endif
+#if defined(AUDIO_ENABLE) && defined(AUDIO_CLICKY)
+            process_clicky(keycode, record) &&
+#endif
+#ifdef HAPTIC_ENABLE
+            process_haptic(keycode, record) &&
+#endif
+#if defined(VIA_ENABLE)
+            process_record_via(keycode, record) &&
+#endif
+#if defined(POINTING_DEVICE_ENABLE) && defined(POINTING_DEVICE_AUTO_MOUSE_ENABLE)
+            process_auto_mouse(keycode, record) &&
+#endif
+            process_record_kb(keycode, record) &&
+#if defined(SECURE_ENABLE)
+            process_secure(keycode, record) &&
+#endif
+#if defined(SEQUENCER_ENABLE)
+            process_sequencer(keycode, record) &&
+#endif
+#if defined(MIDI_ENABLE) && defined(MIDI_ADVANCED)
+            process_midi(keycode, record) &&
+#endif
 #ifdef AUDIO_ENABLE
-  bool is_music_on(void) {
-      return (music_activated != 0);
-  }
-
-  void music_toggle(void) {
-      if (!music_activated) {
-          music_on();
-      } else {
-          music_off();
-      }
-  }
-
-  void music_on(void) {
-      music_activated = 1;
-      music_on_user();
-  }
-
-  void music_off(void) {
-      music_activated = 0;
-      stop_all_notes();
-  }
-
+            process_audio(keycode, record) &&
 #endif
+#if defined(BACKLIGHT_ENABLE)
+            process_backlight(keycode, record) &&
+#endif
+#if defined(LED_MATRIX_ENABLE)
+            process_led_matrix(keycode, record) &&
+#endif
+#ifdef STENO_ENABLE
+            process_steno(keycode, record) &&
+#endif
+#if (defined(AUDIO_ENABLE) || (defined(MIDI_ENABLE) && defined(MIDI_BASIC))) && !defined(NO_MUSIC_MODE)
+            process_music(keycode, record) &&
+#endif
+#ifdef CAPS_WORD_ENABLE
+            process_caps_word(keycode, record) &&
+#endif
+#ifdef KEY_OVERRIDE_ENABLE
+            process_key_override(keycode, record) &&
+#endif
+#ifdef TAP_DANCE_ENABLE
+            process_tap_dance(keycode, record) &&
+#endif
+#if defined(UNICODE_COMMON_ENABLE)
+            process_unicode_common(keycode, record) &&
+#endif
+#ifdef LEADER_ENABLE
+            process_leader(keycode, record) &&
+#endif
+#ifdef AUTO_SHIFT_ENABLE
+            process_auto_shift(keycode, record) &&
+#endif
+#ifdef DYNAMIC_TAPPING_TERM_ENABLE
+            process_dynamic_tapping_term(keycode, record) &&
+#endif
+#ifdef SPACE_CADET_ENABLE
+            process_space_cadet(keycode, record) &&
+#endif
+#ifdef MAGIC_ENABLE
+            process_magic(keycode, record) &&
+#endif
+#ifdef GRAVE_ESC_ENABLE
+            process_grave_esc(keycode, record) &&
+#endif
+#if defined(RGBLIGHT_ENABLE) || defined(RGB_MATRIX_ENABLE)
+            process_rgb(keycode, record) &&
+#endif
+#ifdef JOYSTICK_ENABLE
+            process_joystick(keycode, record) &&
+#endif
+#ifdef PROGRAMMABLE_BUTTON_ENABLE
+            process_programmable_button(keycode, record) &&
+#endif
+#ifdef AUTOCORRECT_ENABLE
+            process_autocorrect(keycode, record) &&
+#endif
+#ifdef TRI_LAYER_ENABLE
+            process_tri_layer(keycode, record) &&
+#endif
+            true)) {
+        return false;
+    }
+
+    if (record->event.pressed) {
+        switch (keycode) {
+#ifndef NO_RESET
+            case QK_BOOTLOADER:
+                reset_keyboard();
+                return false;
+            case QK_REBOOT:
+                soft_reset_keyboard();
+                return false;
+#endif
+#ifndef NO_DEBUG
+            case QK_DEBUG_TOGGLE:
+                debug_enable ^= 1;
+                if (debug_enable) {
+                    print("DEBUG: enabled.\n");
+                } else {
+                    print("DEBUG: disabled.\n");
+                }
+#endif
+                return false;
+            case QK_CLEAR_EEPROM:
+#ifdef NO_RESET
+                eeconfig_init();
+#else
+                eeconfig_disable();
+                soft_reset_keyboard();
+#endif
+                return false;
+#ifdef VELOCIKEY_ENABLE
+            case QK_VELOCIKEY_TOGGLE:
+                velocikey_toggle();
+                return false;
+#endif
+#ifdef BLUETOOTH_ENABLE
+            case QK_OUTPUT_AUTO:
+                set_output(OUTPUT_AUTO);
+                return false;
+            case QK_OUTPUT_USB:
+                set_output(OUTPUT_USB);
+                return false;
+            case QK_OUTPUT_BLUETOOTH:
+                set_output(OUTPUT_BLUETOOTH);
+                return false;
+#endif
+#ifndef NO_ACTION_ONESHOT
+            case QK_ONE_SHOT_TOGGLE:
+                oneshot_toggle();
+                break;
+            case QK_ONE_SHOT_ON:
+                oneshot_enable();
+                break;
+            case QK_ONE_SHOT_OFF:
+                oneshot_disable();
+                break;
+#endif
+#ifdef ENABLE_COMPILE_KEYCODE
+            case QK_MAKE: // Compiles the firmware, and adds the flash command based on keyboard bootloader
+            {
+#    ifdef NO_ACTION_ONESHOT
+                const uint8_t temp_mod = mod_config(get_mods());
+#    else
+                const uint8_t temp_mod = mod_config(get_mods() | get_oneshot_mods());
+                clear_oneshot_mods();
+#    endif
+                clear_mods();
+
+                SEND_STRING_DELAY("qmk", TAP_CODE_DELAY);
+                if (temp_mod & MOD_MASK_SHIFT) { // if shift is held, flash rather than compile
+                    SEND_STRING_DELAY(" flash ", TAP_CODE_DELAY);
+                } else {
+                    SEND_STRING_DELAY(" compile ", TAP_CODE_DELAY);
+                }
+#    if defined(CONVERTER_ENABLED)
+                SEND_STRING_DELAY("-kb " QMK_KEYBOARD " -km " QMK_KEYMAP " -e CONVERT_TO=" CONVERTER_TARGET SS_TAP(X_ENTER), TAP_CODE_DELAY);
+#    else
+                SEND_STRING_DELAY("-kb " QMK_KEYBOARD " -km " QMK_KEYMAP SS_TAP(X_ENTER), TAP_CODE_DELAY);
+#    endif
+                if (temp_mod & MOD_MASK_SHIFT && temp_mod & MOD_MASK_CTRL) {
+                    reset_keyboard();
+                }
+            }
+#endif
+        }
+    }
+
+    return process_action_kb(record);
+}
+
+void set_single_persistent_default_layer(uint8_t default_layer) {
+#if defined(AUDIO_ENABLE) && defined(DEFAULT_LAYER_SONGS)
+    PLAY_SONG(default_layer_songs[default_layer]);
+#endif
+    eeconfig_update_default_layer((layer_state_t)1 << default_layer);
+    default_layer_set((layer_state_t)1 << default_layer);
+}
 
 //------------------------------------------------------------------------------
 // Override these functions in your keymap file to play different tunes on
 // different events such as startup and bootloader jump
 
-__attribute__ ((weak))
-void startup_user() {}
+__attribute__((weak)) bool shutdown_user(bool jump_to_bootloader) {
+    return true;
+}
 
-__attribute__ ((weak))
-void shutdown_user() {}
+__attribute__((weak)) bool shutdown_kb(bool jump_to_bootloader) {
+    if (!shutdown_user(jump_to_bootloader)) {
+        return false;
+    }
+    return true;
+}
 
-__attribute__ ((weak))
-void music_on_user() {}
+void suspend_power_down_quantum(void) {
+    suspend_power_down_kb();
+#ifndef NO_SUSPEND_POWER_DOWN
+// Turn off backlight
+#    ifdef BACKLIGHT_ENABLE
+    backlight_level_noeeprom(0);
+#    endif
 
-__attribute__ ((weak))
-void audio_on_user() {}
+#    ifdef LED_MATRIX_ENABLE
+    led_matrix_task();
+#    endif
+#    ifdef RGB_MATRIX_ENABLE
+    rgb_matrix_task();
+#    endif
 
-__attribute__ ((weak))
-void music_scale_user() {}
+    // Turn off LED indicators
+    led_suspend();
 
-//------------------------------------------------------------------------------
+// Turn off audio
+#    ifdef AUDIO_ENABLE
+    stop_all_notes();
+#    endif
+
+// Turn off underglow
+#    if defined(RGBLIGHT_SLEEP) && defined(RGBLIGHT_ENABLE)
+    rgblight_suspend();
+#    endif
+
+#    if defined(LED_MATRIX_ENABLE)
+    led_matrix_set_suspend_state(true);
+#    endif
+#    if defined(RGB_MATRIX_ENABLE)
+    rgb_matrix_set_suspend_state(true);
+#    endif
+
+#    ifdef OLED_ENABLE
+    oled_off();
+#    endif
+#    ifdef ST7565_ENABLE
+    st7565_off();
+#    endif
+#    if defined(POINTING_DEVICE_ENABLE)
+    // run to ensure scanning occurs while suspended
+    pointing_device_task();
+#    endif
+#endif
+}
+
+__attribute__((weak)) void suspend_wakeup_init_quantum(void) {
+// Turn on backlight
+#ifdef BACKLIGHT_ENABLE
+    backlight_init();
+#endif
+
+    // Restore LED indicators
+    led_wakeup();
+
+// Wake up underglow
+#if defined(RGBLIGHT_SLEEP) && defined(RGBLIGHT_ENABLE)
+    rgblight_wakeup();
+#endif
+
+#if defined(LED_MATRIX_ENABLE)
+    led_matrix_set_suspend_state(false);
+#endif
+#if defined(RGB_MATRIX_ENABLE)
+    rgb_matrix_set_suspend_state(false);
+#endif
+    suspend_wakeup_init_kb();
+}
+
+/** \brief converts unsigned integers into char arrays
+ *
+ * Takes an unsigned integer and converts that value into an equivalent char array
+ * A padding character may be specified, ' ' for leading spaces, '0' for leading zeros.
+ */
+
+const char *get_numeric_str(char *buf, size_t buf_len, uint32_t curr_num, char curr_pad) {
+    buf[buf_len - 1] = '\0';
+    for (size_t i = 0; i < buf_len - 1; ++i) {
+        char c               = '0' + curr_num % 10;
+        buf[buf_len - 2 - i] = (c == '0' && i == 0) ? '0' : (curr_num > 0 ? c : curr_pad);
+        curr_num /= 10;
+    }
+    return buf;
+}
+
+/** \brief converts uint8_t into char array
+ *
+ * Takes an uint8_t, and uses an internal static buffer to render that value into a char array
+ * A padding character may be specified, ' ' for leading spaces, '0' for leading zeros.
+ *
+ * NOTE: Subsequent invocations will reuse the same static buffer and overwrite the previous
+ *       contents. Use the result immediately, instead of caching it.
+ */
+const char *get_u8_str(uint8_t curr_num, char curr_pad) {
+    static char    buf[4]   = {0};
+    static uint8_t last_num = 0xFF;
+    static char    last_pad = '\0';
+    if (last_num == curr_num && last_pad == curr_pad) {
+        return buf;
+    }
+    last_num = curr_num;
+    last_pad = curr_pad;
+    return get_numeric_str(buf, sizeof(buf), curr_num, curr_pad);
+}
+
+/** \brief converts uint16_t into char array
+ *
+ * Takes an uint16_t, and uses an internal static buffer to render that value into a char array
+ * A padding character may be specified, ' ' for leading spaces, '0' for leading zeros.
+ *
+ * NOTE: Subsequent invocations will reuse the same static buffer and overwrite the previous
+ *       contents. Use the result immediately, instead of caching it.
+ */
+const char *get_u16_str(uint16_t curr_num, char curr_pad) {
+    static char     buf[6]   = {0};
+    static uint16_t last_num = 0xFF;
+    static char     last_pad = '\0';
+    if (last_num == curr_num && last_pad == curr_pad) {
+        return buf;
+    }
+    last_num = curr_num;
+    last_pad = curr_pad;
+    return get_numeric_str(buf, sizeof(buf), curr_num, curr_pad);
+}
+
+#if defined(SECURE_ENABLE)
+void secure_hook_quantum(secure_status_t secure_status) {
+    // If keys are being held when this is triggered, they may not be released properly
+    // this can result in stuck keys, mods and layers.  To prevent that, manually
+    // clear these, when it is triggered.
+
+    if (secure_status == SECURE_PENDING) {
+        clear_keyboard();
+        layer_clear();
+    }
+}
+#endif
